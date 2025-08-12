@@ -18,6 +18,8 @@ from ndsl.typing import Communicator
 from pace.state import DriverState
 from pyFV3 import DycoreState
 
+from pyfms import diag_manager
+
 
 try:
     import zarr.storage as zarr_storage
@@ -80,7 +82,7 @@ class DiagnosticsConfig:
             output_format is "netcdf"
         names: state variables to save as diagnostics
         derived_names: derived diagnostics to save
-        z_select: save a veritcal slice of a 3D state
+        z_select: save a vertical slice of a 3D state
     """
 
     path: Optional[str] = None
@@ -96,7 +98,7 @@ class DiagnosticsConfig:
             raise ValueError(
                 "DiagnosticsConfig.path must be given to enable diagnostics"
             )
-        if self.output_format not in ["zarr", "netcdf"]:
+        if self.output_format not in ["zarr", "netcdf", "diag_manager"]:
             raise ValueError(
                 "output_format must be one of 'zarr' or 'netcdf', "
                 f"got {self.output_format}"
@@ -141,6 +143,18 @@ class DiagnosticsConfig:
                     time_chunk_size=self.time_chunk_size,
                     precision=precision,
                 )
+            elif self.output_format == "diag_manager":
+                if self.precision == "Float":
+                    precision = Float
+                elif self.precision == "float32":
+                    precision = np.float32
+                elif self.precision == "float64":
+                    precision = np.float64
+                diagnostics = DiagManagerDiagnostics(
+                    names=self.names,
+                    derived_names=self.derived_names,
+                )
+                return diagnostics
             else:
                 raise ValueError(
                     "output_format must be one of 'zarr' or 'netcdf', "
@@ -263,3 +277,64 @@ def _compute_column_integral(name: str, q_in: Quantity, delp: Quantity):
         units="kg/m**2",
     )
     return column_integral
+
+
+class DiagManagerDiagnostics(Diagnostics):
+    """Diagnostics that use FMS's diag_manager from pyFMS."""
+
+    def __init__(
+        self,
+        names: List[str],
+        derived_names: List[str],
+    ):
+        """
+        Args:
+            monitor: a sympl-style Monitor object
+            names: list of names of diagnostics to save
+            derived_names: list of names of derived diagnostics to save
+        """
+        self.names = names
+        self.derived_names = derived_names
+        print(f"DiagManagerDiagnostics.__init__ :: names:{self.names} derived_names:{self.derived_names}")
+        diag_manager.init(diag_model_subset=diag_manager.DIAG_ALL)
+        print("called diag_manager.init")
+        
+
+    def store(self, time: Union[datetime, timedelta], state: DriverState):
+        print("DiagManagerDiagnostics.store was called wooo!")
+        
+        pass
+
+    def store_grid(self, grid_data: GridData):
+        # set up axis for diag manager
+        diag_manager.axis_init(
+            name="x",
+            axis_data= grid_data.lat.data,
+            units="lat",
+            cart_name="x",
+            domain_id=0,
+            long_name="",
+            set_name="atm",
+        )
+        diag_manager.axis_init(
+            name="y",
+            axis_data= grid_data.lon.data,
+            units="lon",
+            cart_name="y",
+            domain_id=0,
+            long_name="",
+            set_name="atm",
+        )
+        diag_manager.axis_init(
+            name="z",
+            axis_data= Z_DIM, 
+            units="z",
+            cart_name="z",
+            domain_id=0,
+            long_name="",
+            set_name="atm",
+        )
+        pass
+
+    def cleanup(self):
+        pass
