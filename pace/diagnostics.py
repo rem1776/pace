@@ -18,7 +18,7 @@ from ndsl.typing import Communicator
 from pace.state import DriverState
 from pyFV3 import DycoreState
 
-from pyfms import diag_manager
+from pyfms import diag_manager, fms, mpp_domains
 
 
 try:
@@ -296,44 +296,77 @@ class DiagManagerDiagnostics(Diagnostics):
         self.names = names
         self.derived_names = derived_names
         print(f"DiagManagerDiagnostics.__init__ :: names:{self.names} derived_names:{self.derived_names}")
+
+        # TODO figure out whether to use the full domain,
+        # or try to trick/modify pyfms to not have to set up a full domain
+
+        # set up a mpp_domain 
+        fms.init(calendar_type=fms.NOLEAP)
+        global_indices = [0, (nx - 1), 0, (ny - 1)]
+        layout = [1, 1]
+        io_layout = [1, 1]
+        domain = mpp_domains.define_domains(
+            global_indices=global_indices,
+            layout=layout,
+        )
+        mpp_domains.define_io_domain(
+            domain_id=domain.domain_id,
+            io_layout=io_layout,
+        )
         diag_manager.init(diag_model_subset=diag_manager.DIAG_ALL)
+        mpp_domains.set_current_domain(domain_id=domain.domain_id)
         print("called diag_manager.init")
-        
+
+        # init axis 
+        """
+        x = np.arange(nx, dtype=np.float64)
+        id_x = diag_manager.axis_init(
+            name="x",
+            axis_data=x,
+            units="point_E",
+            cart_name="x",
+            domain_id=domain.domain_id,
+            long_name="point_E",
+            set_name="atm",
+        )
+        y = np.arange(ny, dtype=np.float64)
+        id_y = diag_manager.axis_init(
+            name="y",
+            axis_data=y,
+            units="point_N",
+            cart_name="y",
+            domain_id=domain.domain_id,
+            long_name="point_N",
+            set_name="atm",
+        )
+        z = np.arange(nz, dtype=np.float64)
+        id_z = diag_manager.axis_init(
+            name="z",
+            axis_data=z,
+            units="point_Z",
+            cart_name="z",
+            long_name="point_Z",
+            set_name="atm",
+            not_xy=True,
+        )
+
+        diag_manager.set_field_init_time(
+            year=2,
+            month=1,
+            day=1,
+            hour=1,
+            minute=1,
+            second=1,
+        )
+        """
 
     def store(self, time: Union[datetime, timedelta], state: DriverState):
         print("DiagManagerDiagnostics.store was called wooo!")
         
         pass
 
+    # called at the end to save entire grid state
     def store_grid(self, grid_data: GridData):
-        # set up axis for diag manager
-        diag_manager.axis_init(
-            name="x",
-            axis_data= grid_data.lat.data,
-            units="lat",
-            cart_name="x",
-            domain_id=0,
-            long_name="",
-            set_name="atm",
-        )
-        diag_manager.axis_init(
-            name="y",
-            axis_data= grid_data.lon.data,
-            units="lon",
-            cart_name="y",
-            domain_id=0,
-            long_name="",
-            set_name="atm",
-        )
-        diag_manager.axis_init(
-            name="z",
-            axis_data= Z_DIM, 
-            units="z",
-            cart_name="z",
-            domain_id=0,
-            long_name="",
-            set_name="atm",
-        )
         pass
 
     def cleanup(self):
