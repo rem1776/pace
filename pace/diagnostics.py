@@ -16,7 +16,7 @@ from ndsl.monitor import Monitor, ZarrMonitor
 from ndsl.monitor.netcdf_monitor import NetCDFMonitor
 from ndsl.typing import Communicator
 from pace.state import DriverState
-from pyFV3 import DycoreState
+from pyfv3 import DycoreState
 
 from pyfms import diag_manager, fms, mpp_domains
 
@@ -29,16 +29,13 @@ except ModuleNotFoundError:
 
 class Diagnostics(abc.ABC):
     @abc.abstractmethod
-    def store(self, time: Union[datetime, timedelta], state: DriverState):
-        ...
+    def store(self, time: Union[datetime, timedelta], state: DriverState): ...
 
     @abc.abstractmethod
-    def store_grid(self, grid_data: GridData):
-        ...
+    def store_grid(self, grid_data: GridData): ...
 
     @abc.abstractmethod
-    def cleanup(self):
-        ...
+    def cleanup(self): ...
 
 
 @dataclasses.dataclass
