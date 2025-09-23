@@ -3,6 +3,7 @@ import dataclasses
 import warnings
 from datetime import datetime, timedelta
 from typing import List, Optional, Union
+from mpi4py import MPI
 
 import numpy as np
 
@@ -19,6 +20,16 @@ from pace.state import DriverState
 from pyfv3 import DycoreState
 
 from pyfms import diag_manager, fms, mpp_domains
+
+# ???
+from ndsl.constants import (
+    X_DIM,
+    X_INTERFACE_DIM,
+    Y_DIM,
+    Y_INTERFACE_DIM,
+    Z_DIM,
+    Z_INTERFACE_DIM,
+)
 
 
 try:
@@ -279,6 +290,11 @@ def _compute_column_integral(name: str, q_in: Quantity, delp: Quantity):
 class DiagManagerDiagnostics(Diagnostics):
     """Diagnostics that use FMS's diag_manager from pyFMS."""
 
+    # idk what im doing here tbh
+    initialized: bool
+    field_ids: dict
+    precision: str
+
     def __init__(
         self,
         names: List[str],
@@ -286,21 +302,81 @@ class DiagManagerDiagnostics(Diagnostics):
     ):
         """
         Args:
-            monitor: a sympl-style Monitor object
             names: list of names of diagnostics to save
             derived_names: list of names of derived diagnostics to save
         """
         self.names = names
         self.derived_names = derived_names
-        print(f"DiagManagerDiagnostics.__init__ :: names:{self.names} derived_names:{self.derived_names}")
+        self.field_ids = {}
+        self.initialized = False
+        # this env var is set by ndsl
+        self.precision = "float" + os.environ["GT4PY_LITERAL_FLOAT_PRECISION"]
+        fms.init(localcomm=MPI.COMM_WORLD.py2f(), calendar_type=fms.NOLEAP)
 
-        # TODO figure out whether to use the full domain,
-        # or try to trick/modify pyfms to not have to set up a full domain
+    @dace_inhibitor
+    def store(self, time: Union[datetime, timedelta], state: DriverState):
+        """
+        Stores data from any given names via the pyFMS diag_manager
+        This requires a diag_table.yaml file to be in the run directory (for now? at least)
+        """
 
-        # set up a mpp_domain 
-        fms.init(calendar_type=fms.NOLEAP)
-        global_indices = [0, (nx - 1), 0, (ny - 1)]
-        layout = [1, 1]
+        if not self.initialized:
+            self._mpp_diag_manager_init(state, time)
+        else:
+            for name in self.names:
+               field_id = self.field_ids[name]
+               diag_manager.advance_field_time(field_id)
+               field_quantity = getattr(state.dycore_state, name)
+               #diag_manager.send_data(diag_field_id=field_id, field=np.ascontiguousarray(field_quantity.data))
+               diag_manager.send_complete(field_id)
+        # TODO send the data!!!
+        #for name in self.names:
+        #    try:
+        #        quantity = getattr(state.dycore_state, name)
+        #    except AttributeError:
+        #        quantity = getattr(state.physics_state, name)
+        #    diag_manager.send_data(self.field_ids[name], quantity.data)
+            #diag_manager.send_complete(self.field_ids[name])
+            #diag_manager.register_field_array()
+        #diag_manager.send_data(
+        #    diag_field_id=self.field_ids["ua"],
+        #    field=np.zeros(q.extent)
+        #)
+        #diag_manager.send_complete(self.field_ids["ua"])
+
+
+
+        # this stuff is more specific to pace's existing diagnostics, will need to decide how to handle it
+        #derived_state = self._get_derived_state(state)
+        #level_select_state = self._get_z_select_state(state.dycore_state)
+        #monitor_state.update(derived_state)
+        #monitor_state.update(level_select_state)
+        #self.monitor.store(monitor_state)
+
+
+    # called at the end to save entire grid state
+    def store_grid(self, grid_data: GridData):
+        pass
+
+    def cleanup(self):
+        diag_manager.end()
+
+    # handles the initial fms/mpp/diag_manager initializations
+    # WIP, this is using placeholders for a lot of the data
+    def _mpp_diag_manager_init(self, state: DriverState, time):
+
+        # below returns different numbers than what is set by nx_tile
+        #nx, ny = state.grid_data.lat.shape
+
+        (x_interface, y_interface) = state.grid_data.lat.extent
+        # TODO prob not always true
+        x = x_interface - 2
+        y = y_interface - 2
+
+        # set up mpp domain
+        global_indices = [0, x, 0, y]
+        npes = MPI.COMM_WORLD.Get_size()
+        layout = [1, npes]
         io_layout = [1, 1]
         domain = mpp_domains.define_domains(
             global_indices=global_indices,
@@ -312,59 +388,123 @@ class DiagManagerDiagnostics(Diagnostics):
         )
         diag_manager.init(diag_model_subset=diag_manager.DIAG_ALL)
         mpp_domains.set_current_domain(domain_id=domain.domain_id)
-        print("called diag_manager.init")
 
-        # init axis 
-        """
-        x = np.arange(nx, dtype=np.float64)
+        # set up axes for our data
+        # pace's existing diagnostics does not save dimensions as separate variables, not sure if we need the exact data
+        #x = np.ascontiguousarray(state.grid_data.lat.data[:-1], dtype="float64")
+        #y = np.ascontiguousarray(state.grid_data.lon.data[:-1], dtype="float64")
+        #x_interface = np.ascontiguousarray(state.grid_data.lat.data, dtype="float64")
+        #y_interface = np.ascontiguousarray(state.grid_data.lon.data, dtype="float64")
+        x = np.arange(x, dtype=self.precision)
+        y = np.arange(y, dtype=self.precision)
+        x_interface = np.arange(x_interface, dtype=self.precision)
+        y_interface = np.arange(y_interface, dtype=self.precision)
+
+        # TODO find a better way to get the z value
+        u_quantity = getattr(state.dycore_state, "u")
+        z_size = u_quantity.shape[2] - 1
+        z = np.arange(z_size, dtype=self.precision)
         id_x = diag_manager.axis_init(
             name="x",
+            long_name="x",
             axis_data=x,
-            units="point_E",
             cart_name="x",
             domain_id=domain.domain_id,
-            long_name="point_E",
             set_name="atm",
+            units="radians"
         )
-        y = np.arange(ny, dtype=np.float64)
         id_y = diag_manager.axis_init(
             name="y",
+            long_name="y",
             axis_data=y,
-            units="point_N",
             cart_name="y",
             domain_id=domain.domain_id,
-            long_name="point_N",
             set_name="atm",
+            units="radians"
         )
-        z = np.arange(nz, dtype=np.float64)
         id_z = diag_manager.axis_init(
             name="z",
+            long_name="z",
             axis_data=z,
-            units="point_Z",
             cart_name="z",
-            long_name="point_Z",
+            domain_id=domain.domain_id,
             set_name="atm",
             not_xy=True,
+            units="radians"
         )
+        id_x_interface = diag_manager.axis_init(
+            name="x_interface",
+            long_name="x_interface",
+            axis_data=x_interface,
+            cart_name="x_interface",
+            domain_id=domain.domain_id,
+            set_name="atm",
+            not_xy=True,
+            units="radians"
+        )
+        id_y_interface = diag_manager.axis_init(
+            name="y_interface",
+            long_name="y_interface",
+            axis_data=y_interface,
+            cart_name="y_interface",
+            domain_id=domain.domain_id,
+            set_name="atm",
+            not_xy=True,
+            units="radians"
+        )
+        axis_ids = {
+            "x": id_x,
+            "y": id_y,
+            "z": id_z,
+            "x_interface": id_x_interface,
+            "y_interface": id_y_interface,
+        }
 
+
+        # TODO time data is stored in the DriverConfig dataclass, so can likely be passed in but will need a new argument most likely
+        # right now the init time should be correct but the end time is hardcoded
         diag_manager.set_field_init_time(
-            year=2,
-            month=1,
-            day=1,
-            hour=1,
-            minute=1,
-            second=1,
+            year=time.year,
+            month=time.month,
+            day=time.day,
+            hour=time.hour,
+            minute=time.minute,
+            second=time.second,
         )
-        """
+        print(f"diag manager init time set as {time.year} {time.month} {time.day} {time.hour} {time.minute} {time.second}")
+        diag_manager.set_time_end(
+            year=time.year,
+            month=time.month,
+            day=time.day,
+            hour=time.hour,
+            minute=15,
+            second=time.second,
+        )
+        print(f"diag manager end time set as {time.year} {time.month} {time.day} {time.hour} 15 {time.second}")
 
-    def store(self, time: Union[datetime, timedelta], state: DriverState):
-        print("DiagManagerDiagnostics.store was called wooo!")
-        
-        pass
+        for name in self.names:
+            # get the quantity for each requested name from the dycore/physics states
+            try:
+                quantity = getattr(state.dycore_state, name)
+            except AttributeError:
+                quantity = getattr(state.physics_state, name)
+            # get its axis id numbers and register the field
+            var_axis_ids = list(map(lambda dimname: axis_ids[dimname], quantity.dims))
+            field_id = diag_manager.register_field_array(
+                module_name="atm_mod",
+                field_name=name,
+                long_name=name,
+                axes=var_axis_ids,
+                dtype=self.precision,
+                units=quantity.units
+            )
+            self.field_ids[name] = field_id
+            # TODO set the timestep, hardcoding for now
+            diag_manager.set_field_timestep(
+               diag_field_id=field_id,
+               dseconds=225,
+               ddays=0,
+               dticks=0,
+            )
+        self.initialized = True
 
-    # called at the end to save entire grid state
-    def store_grid(self, grid_data: GridData):
-        pass
-
-    def cleanup(self):
-        pass
