@@ -1,6 +1,7 @@
 import abc
 import dataclasses
 import warnings
+import os
 from datetime import datetime, timedelta
 from typing import List, Optional, Union
 from mpi4py import MPI
@@ -322,31 +323,19 @@ class DiagManagerDiagnostics(Diagnostics):
 
         if not self.initialized:
             self._mpp_diag_manager_init(state, time)
-        else:
-            for name in self.names:
-               field_id = self.field_ids[name]
-               diag_manager.advance_field_time(field_id)
-               field_quantity = getattr(state.dycore_state, name)
-               #diag_manager.send_data(diag_field_id=field_id, field=np.ascontiguousarray(field_quantity.data))
-               diag_manager.send_complete(field_id)
-        # TODO send the data!!!
-        #for name in self.names:
-        #    try:
-        #        quantity = getattr(state.dycore_state, name)
-        #    except AttributeError:
-        #        quantity = getattr(state.physics_state, name)
-        #    diag_manager.send_data(self.field_ids[name], quantity.data)
-            #diag_manager.send_complete(self.field_ids[name])
-            #diag_manager.register_field_array()
-        #diag_manager.send_data(
-        #    diag_field_id=self.field_ids["ua"],
-        #    field=np.zeros(q.extent)
-        #)
-        #diag_manager.send_complete(self.field_ids["ua"])
+            self.initialized = True
 
+        # get each variable from the dycore state and pass in it's data to the diag_manager
+        # needs to be contiguous and transposed since its fortran
+        for name in self.names:
+           field_id = self.field_ids[name]
+           field_quantity = getattr(state.dycore_state, name)
+           print("**************************** calling send data*******************")
+           diag_manager.send_data(diag_field_id=field_id, field=np.ascontiguousarray(field_quantity.data.transpose()))
+           diag_manager.send_complete(field_id)
+           diag_manager.advance_field_time(field_id)
 
-
-        # this stuff is more specific to pace's existing diagnostics, will need to decide how to handle it
+        # TODO this stuff is more specific to pace's existing diagnostics, will need to decide how to handle it
         #derived_state = self._get_derived_state(state)
         #level_select_state = self._get_z_select_state(state.dycore_state)
         #monitor_state.update(derived_state)
@@ -362,12 +351,10 @@ class DiagManagerDiagnostics(Diagnostics):
         diag_manager.end()
 
     # handles the initial fms/mpp/diag_manager initializations
-    # WIP, this is using placeholders for a lot of the data
     def _mpp_diag_manager_init(self, state: DriverState, time):
 
         # below returns different numbers than what is set by nx_tile
         #nx, ny = state.grid_data.lat.shape
-
         (x_interface, y_interface) = state.grid_data.lat.extent
         # TODO prob not always true
         x = x_interface - 2
@@ -390,18 +377,11 @@ class DiagManagerDiagnostics(Diagnostics):
         mpp_domains.set_current_domain(domain_id=domain.domain_id)
 
         # set up axes for our data
-        # pace's existing diagnostics does not save dimensions as separate variables, not sure if we need the exact data
-        #x = np.ascontiguousarray(state.grid_data.lat.data[:-1], dtype="float64")
-        #y = np.ascontiguousarray(state.grid_data.lon.data[:-1], dtype="float64")
-        #x_interface = np.ascontiguousarray(state.grid_data.lat.data, dtype="float64")
-        #y_interface = np.ascontiguousarray(state.grid_data.lon.data, dtype="float64")
         x = np.arange(x, dtype=self.precision)
         y = np.arange(y, dtype=self.precision)
         x_interface = np.arange(x_interface, dtype=self.precision)
         y_interface = np.arange(y_interface, dtype=self.precision)
-
-        # TODO find a better way to get the z value
-        u_quantity = getattr(state.dycore_state, "u")
+        u_quantity = getattr(state.dycore_state, "u") # TODO find a better way to get the z value
         z_size = u_quantity.shape[2] - 1
         z = np.arange(z_size, dtype=self.precision)
         id_x = diag_manager.axis_init(
@@ -460,9 +440,7 @@ class DiagManagerDiagnostics(Diagnostics):
             "y_interface": id_y_interface,
         }
 
-
-        # TODO time data is stored in the DriverConfig dataclass, so can likely be passed in but will need a new argument most likely
-        # right now the init time should be correct but the end time is hardcoded
+        # current time is the start time
         diag_manager.set_field_init_time(
             year=time.year,
             month=time.month,
@@ -472,15 +450,17 @@ class DiagManagerDiagnostics(Diagnostics):
             second=time.second,
         )
         print(f"diag manager init time set as {time.year} {time.month} {time.day} {time.hour} {time.minute} {time.second}")
+
+        # TODO get the proper end time from the driver, this is hardcoded for the baroclinic test
         diag_manager.set_time_end(
             year=time.year,
             month=time.month,
             day=time.day,
             hour=time.hour,
             minute=15,
-            second=time.second,
+            second=0,
         )
-        print(f"diag manager end time set as {time.year} {time.month} {time.day} {time.hour} 15 {time.second}")
+        print(f"diag manager end time set as {time.year} {time.month} {time.day} {time.hour} 15 0")
 
         for name in self.names:
             # get the quantity for each requested name from the dycore/physics states
@@ -490,6 +470,9 @@ class DiagManagerDiagnostics(Diagnostics):
                 quantity = getattr(state.physics_state, name)
             # get its axis id numbers and register the field
             var_axis_ids = list(map(lambda dimname: axis_ids[dimname], quantity.dims))
+            # TODO should reverse ordering to pass into fortran, but this breaks the send_data call (with/without transposed data)
+            #var_axis_ids.reverse()
+
             field_id = diag_manager.register_field_array(
                 module_name="atm_mod",
                 field_name=name,
