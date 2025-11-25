@@ -330,8 +330,7 @@ class DiagManagerDiagnostics(Diagnostics):
         for name in self.names:
            field_id = self.field_ids[name]
            field_quantity = getattr(state.dycore_state, name)
-           print("**************************** calling send data*******************")
-           diag_manager.send_data(diag_field_id=field_id, field=np.ascontiguousarray(field_quantity.data.transpose()))
+           diag_manager.send_data(diag_field_id=field_id, field=np.ascontiguousarray(field_quantity.data.transpose()), convert_cf_order=False)
            diag_manager.send_complete(field_id)
            diag_manager.advance_field_time(field_id)
 
@@ -356,25 +355,38 @@ class DiagManagerDiagnostics(Diagnostics):
         # below returns different numbers than what is set by nx_tile
         #nx, ny = state.grid_data.lat.shape
         (x_interface, y_interface) = state.grid_data.lat.extent
-        # TODO prob not always true
-        x = x_interface - 2
-        y = y_interface - 2
+
+        # TODO hardcoded for now 
+        nhalo = 1
+        x = x_interface-1
+        y = y_interface-1
 
         # set up mpp domain
-        global_indices = [0, x, 0, y]
+        ntiles = 6
         npes = MPI.COMM_WORLD.Get_size()
-        layout = [1, npes]
+        layout = [1, npes/ntiles]
         io_layout = [1, 1]
-        domain = mpp_domains.define_domains(
+        x_indices = [ x for i in range(6) ]
+        y_indices = [ y for i in range(6) ]
+        # TODO, there is a way to get global indices (ie. projected onto latlon) but i think this isn't expecting that..
+        global_indices = [0, x-1, 0, y-1]
+
+        domain_id = mpp_domains.define_cubic_mosaic(
+            ni=x_indices,
+            nj=y_indices,
             global_indices=global_indices,
             layout=layout,
+            ntiles=ntiles,
+            halo=nhalo,
+            use_memsize=False,
         )
+
         mpp_domains.define_io_domain(
-            domain_id=domain.domain_id,
+            domain_id=domain_id,
             io_layout=io_layout,
         )
         diag_manager.init(diag_model_subset=diag_manager.DIAG_ALL)
-        mpp_domains.set_current_domain(domain_id=domain.domain_id)
+        mpp_domains.set_current_domain(domain_id=domain_id)
 
         # set up axes for our data
         x = np.arange(x, dtype=self.precision)
@@ -389,7 +401,7 @@ class DiagManagerDiagnostics(Diagnostics):
             long_name="x",
             axis_data=x,
             cart_name="x",
-            domain_id=domain.domain_id,
+            domain_id=domain_id,
             set_name="atm",
             units="radians"
         )
@@ -398,7 +410,7 @@ class DiagManagerDiagnostics(Diagnostics):
             long_name="y",
             axis_data=y,
             cart_name="y",
-            domain_id=domain.domain_id,
+            domain_id=domain_id,
             set_name="atm",
             units="radians"
         )
@@ -407,7 +419,7 @@ class DiagManagerDiagnostics(Diagnostics):
             long_name="z",
             axis_data=z,
             cart_name="z",
-            domain_id=domain.domain_id,
+            domain_id=domain_id,
             set_name="atm",
             not_xy=True,
             units="radians"
@@ -417,7 +429,7 @@ class DiagManagerDiagnostics(Diagnostics):
             long_name="x_interface",
             axis_data=x_interface,
             cart_name="x_interface",
-            domain_id=domain.domain_id,
+            domain_id=domain_id,
             set_name="atm",
             not_xy=True,
             units="radians"
@@ -427,7 +439,7 @@ class DiagManagerDiagnostics(Diagnostics):
             long_name="y_interface",
             axis_data=y_interface,
             cart_name="y_interface",
-            domain_id=domain.domain_id,
+            domain_id=domain_id,
             set_name="atm",
             not_xy=True,
             units="radians"
