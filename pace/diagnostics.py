@@ -5,6 +5,7 @@ import os
 from datetime import datetime, timedelta
 from typing import List, Optional, Union
 from mpi4py import MPI
+from pathlib import Path
 
 import numpy as np
 
@@ -12,7 +13,6 @@ from ndsl import Quantity
 from ndsl.constants import RGRAV, Z_DIM, Z_INTERFACE_DIM
 from ndsl.dsl.dace.orchestration import dace_inhibitor
 from ndsl.dsl.typing import Float
-from ndsl.filesystem import get_fs
 from ndsl.grid import GridData
 from ndsl.monitor import Monitor, ZarrMonitor
 from ndsl.monitor.netcdf_monitor import NetCDFMonitor
@@ -41,7 +41,7 @@ except ModuleNotFoundError:
 
 class Diagnostics(abc.ABC):
     @abc.abstractmethod
-    def store(self, time: Union[datetime, timedelta], state: DriverState): ...
+    def store(self, time: datetime | timedelta, state: DriverState): ...
 
     @abc.abstractmethod
     def store_grid(self, grid_data: GridData): ...
@@ -53,7 +53,7 @@ class Diagnostics(abc.ABC):
 @dataclasses.dataclass
 class ZSelect:
     level: int
-    names: List[str]
+    names: list[str]
 
     def select_data(self, state: DycoreState):
         output = {}
@@ -94,12 +94,12 @@ class DiagnosticsConfig:
         z_select: save a vertical slice of a 3D state
     """
 
-    path: Optional[str] = None
+    path: str | None = None
     output_format: str = "zarr"
     time_chunk_size: int = 1
-    names: List[str] = dataclasses.field(default_factory=list)
-    derived_names: List[str] = dataclasses.field(default_factory=list)
-    z_select: List[ZSelect] = dataclasses.field(default_factory=list)
+    names: list[str] = dataclasses.field(default_factory=list)
+    derived_names: list[str] = dataclasses.field(default_factory=list)
+    z_select: list[ZSelect] = dataclasses.field(default_factory=list)
     precision: str = "Float"
 
     def __post_init__(self):
@@ -127,55 +127,58 @@ class DiagnosticsConfig:
                 or to coordinate filesystem access between ranks
         """
         if self.path is None:
-            diagnostics: Diagnostics = NullDiagnostics()
-        else:
-            fs = get_fs(self.path)
-            if not fs.exists(self.path):
-                fs.makedirs(self.path, exist_ok=True)
-            if self.output_format == "zarr":
-                store = zarr_storage.DirectoryStore(path=self.path)
-                monitor: Monitor = ZarrMonitor(
-                    store=store,
-                    partitioner=communicator.partitioner,
-                    mpi_comm=communicator.comm,
-                )
-            elif self.output_format == "netcdf":
-                if self.precision == "Float":
-                    precision = Float
-                elif self.precision == "float32":
-                    precision = np.float32
-                elif self.precision == "float64":
-                    precision = np.float64
-                monitor = NetCDFMonitor(
-                    path=self.path,
-                    communicator=communicator,
-                    time_chunk_size=self.time_chunk_size,
-                    precision=precision,
-                )
-            elif self.output_format == "diag_manager":
-                if self.precision == "Float":
-                    precision = Float
-                elif self.precision == "float32":
-                    precision = np.float32
-                elif self.precision == "float64":
-                    precision = np.float64
-                diagnostics = DiagManagerDiagnostics(
-                    names=self.names,
-                    derived_names=self.derived_names,
-                )
-                return diagnostics
-            else:
-                raise ValueError(
-                    "output_format must be one of 'zarr' or 'netcdf', "
-                    f"got {self.output_format}"
-                )
-            diagnostics = MonitorDiagnostics(
-                monitor=monitor,
+            return NullDiagnostics()
+
+        if not Path(self.path).exists():
+            Path(self.path).mkdir()
+
+        if self.output_format == "zarr":
+            store = zarr_storage.DirectoryStore(path=self.path)
+            monitor: Monitor = ZarrMonitor(
+                store=store,
+                partitioner=communicator.partitioner,
+                mpi_comm=communicator.comm,
+            )
+        elif self.output_format == "netcdf":
+            if self.precision == "Float":
+                precision = Float
+            elif self.precision == "float32":
+                precision = np.float32
+            elif self.precision == "float64":
+                precision = np.float64
+            monitor = NetCDFMonitor(
+                path=self.path,
+                communicator=communicator,
+                time_chunk_size=self.time_chunk_size,
+                precision=precision,
+            )
+
+        elif self.output_format == "diag_manager":
+            if self.precision == "Float":
+                precision = Float
+            elif self.precision == "float32":
+                precision = np.float32
+            elif self.precision == "float64":
+                precision = np.float64
+            diagnostics = DiagManagerDiagnostics(
                 names=self.names,
                 derived_names=self.derived_names,
-                z_select=self.z_select,
             )
-        return diagnostics
+            # not a ndsl monitor 
+            return diagnostics
+
+        else:
+            raise ValueError(
+                "output_format must be one of 'zarr', 'netcdf', or 'diag_manager', "
+                f"got {self.output_format}"
+            )
+
+        return MonitorDiagnostics(
+            monitor=monitor,
+            names=self.names,
+            derived_names=self.derived_names,
+            z_select=self.z_select,
+        )
 
 
 class MonitorDiagnostics(Diagnostics):
@@ -184,9 +187,9 @@ class MonitorDiagnostics(Diagnostics):
     def __init__(
         self,
         monitor: Monitor,
-        names: List[str],
-        derived_names: List[str],
-        z_select: List[ZSelect],
+        names: list[str],
+        derived_names: list[str],
+        z_select: list[ZSelect],
     ):
         """
         Args:
@@ -200,7 +203,7 @@ class MonitorDiagnostics(Diagnostics):
         self.monitor = monitor
 
     @dace_inhibitor
-    def store(self, time: Union[datetime, timedelta], state: DriverState):
+    def store(self, time: datetime | timedelta, state: DriverState):
         monitor_state = {"time": time}
         for name in self.names:
             try:
@@ -252,7 +255,7 @@ class MonitorDiagnostics(Diagnostics):
 class NullDiagnostics(Diagnostics):
     """Diagnostics that do nothing."""
 
-    def store(self, time: Union[datetime, timedelta], state: DriverState):
+    def store(self, time: datetime | timedelta, state: DriverState):
         pass
 
     def store_grid(self, grid_data: GridData):

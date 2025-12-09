@@ -173,7 +173,6 @@ class DriverConfig:
                 ny_tile=self.nx_tile,
                 nz=self.nz,
                 n_halo=N_HALO_DEFAULT,
-                extra_dim_lengths={},
                 layout=self.layout,
                 tile_partitioner=communicator.partitioner.tile,
                 tile_rank=communicator.tile.rank,
@@ -203,7 +202,6 @@ class DriverConfig:
                 ny_tile=self.nx_tile,
                 nz=self.nz,
                 n_halo=N_HALO_DEFAULT,
-                extra_dim_lengths={},
                 layout=self.layout,
                 tile_partitioner=communicator.partitioner.tile,
                 tile_rank=communicator.tile.rank,
@@ -238,29 +236,13 @@ class DriverConfig:
                         f"you cannot set {derived_name} directly in dycore_config, "
                         "as it is determined based on top-level configuration"
                     )
-
-            # TODO - After pyFV3 PR #88, replace dycore dacite cmd with:
-            # kwargs["dycore_config"] = DynamicalCoreConfig.from_dict(
-            #     kwargs.get("dycore_config", {})
-            # )
-            dycore_dacite_config = dacite.Config(
-                strict=True,
-                type_hooks={
-                    Tuple[int, int]: lambda x: tuple(x),
-                    Tuple[str, ...]: lambda x: tuple(x) if x is not None else None,
-                },
-            )
-            kwargs["dycore_config"] = dacite.from_dict(
-                data_class=DynamicalCoreConfig,
-                data=kwargs.get("dycore_config", {}),
-                config=dycore_dacite_config,
+            kwargs["dycore_config"] = DynamicalCoreConfig.from_dict(
+                kwargs.get("dycore_config", {})
             )
 
         if isinstance(kwargs["physics_config"], dict):
-            kwargs["physics_config"] = dacite.from_dict(
-                data_class=PhysicsConfig,
-                data=kwargs.get("physics_config", {}),
-                config=dacite.Config(strict=True),
+            kwargs["physics_config"] = PhysicsConfig.from_dict(
+                kwargs.get("physics_config", {})
             )
 
         kwargs["layout"] = tuple(kwargs["layout"])
@@ -770,7 +752,6 @@ def _setup_factories(
         ny_tile=config.nx_tile,
         nz=config.nz,
         n_halo=N_HALO_DEFAULT,
-        extra_dim_lengths={},
         layout=config.layout,
         tile_partitioner=communicator.partitioner.tile,
         tile_rank=communicator.tile.rank,
