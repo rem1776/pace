@@ -752,8 +752,19 @@ class Driver:
             ndsl_log.info(f"Finished stepping {step}")
         self.performance_collector.collect_performance()
         self.time += self.config.timestep
-        if ((step + 1) % self.config.output_frequency) == 0:
-            ndsl_log.info(f"diagnostics for step {self.time} started")
+        if self.config.diagnostics_config.output_format != "diag_manager":
+            if ((step + 1) % self.config.output_frequency) == 0:
+                ndsl_log.info(f"diagnostics for step {self.time} started")
+                self.performance_collector.write_out_rank_0(
+                    self.config.stencil_config.compilation_config.backend,
+                    self.config.stencil_config.dace_config.is_dace_orchestrated(),
+                    self.config.dt_atmos,
+                    "Ongoing",
+                )
+                self.diagnostics.store(time=self.time, state=self.state)
+                ndsl_log.info(f"diagnostics for step {self.time} finished")
+        else:
+            ndsl_log.info(f"diagnostics for step {self.time} started (diag_manager)")
             self.performance_collector.write_out_rank_0(
                 self.config.stencil_config.compilation_config.backend,
                 self.config.stencil_config.dace_config.is_dace_orchestrated(),
@@ -761,6 +772,9 @@ class Driver:
                 "Ongoing",
             )
             self.diagnostics.store(time=self.time, state=self.state)
+            if ((step + 1) % self.config.output_frequency) == 0:
+                self.diagnostics.monitor.store_complete()
+                ndsl_log.info(f"finishing diagnostics for this timestep (output_frequency reached)")
             ndsl_log.info(f"diagnostics for step {self.time} finished")
         if (
             self.config.safety_check_frequency

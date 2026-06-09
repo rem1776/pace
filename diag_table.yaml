@@ -2,11 +2,11 @@ title: pace_diag_manager_test
 base_date: 2000 1 1 0 0 0
 diag_files:
   - file_name: pace_diagnostics
-    freq: 225 seconds 
+    freq: 450 seconds 
     time_units: seconds 
     unlimdim: time
     module: pyfv3 
-    reduction: none 
+    reduction: sum 
     kind: r8
     varlist:
     - var_name: u
